@@ -2,6 +2,8 @@ node_modules/
 dist/
 .env
 cache/
+.cache/
+data/
 output/
 *.log
 .webhook-key

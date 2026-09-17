@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## Kinetic Typography: MP3 → Finished MP4\n\nReceives a multipart/form-data upload with an audio file field named `file`, saves it on the shared media volume, triggers the render service, polls until the video is complete, and returns the finished MP4 as a binary download.\n\nDocumented in README §6. Requires:\n- `KINETIC_API_URL` env (n8n): render service URL\n- The media volume mounted identically in n8n and the render container"
+        "content": "## Kinetic Typography: MP3 â†’ Finished MP4\n\nReceives a multipart/form-data upload with an audio file field named `file`, saves it on the shared media volume, triggers the render service, polls until the video is complete, and returns the finished MP4 as a binary download.\n\nDocumented in README Â§6. Requires:\n- `KINETIC_API_URL` env (n8n): render service URL\n- The media volume mounted identically in n8n and the render container"
       },
       "id": "note-usage",
       "name": "Usage",
@@ -36,7 +36,7 @@
     {
       "parameters": {
         "figureOutFileName": false,
-        "fileName": "={{ $env.KINETIC_MEDIA_DIR || '/media' }}/uploads/{{ $binary.file.fileName || 'upload.mp3' }}",
+        "fileName": "={{ $env.KINETIC_DATA_DIR || '/app/data' }}/{{ $binary.file.fileName || 'upload.mp3' }}",
         "dataPropertyName": "file",
         "options": {}
       },
@@ -52,20 +52,20 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:3000' }}/render",
+        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:4000' }}/render",
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"file_path\": \"{{ $('Save MP3').item.json.fileName }}\",\n  \"config_path\": \"{{ $('MP3 Upload Webhook').item.json.body?.config_path || 'config/config.yml' }}\",\n  \"language\": \"{{ $('MP3 Upload Webhook').item.json.body?.language || 'en' }}\"\n}",
         "options": {
           "headers": {
             "entries": [
               {
                 "name": "X-API-Key",
-                "value": "={{ .KINETIC_API_KEY }}"
+                "value": "={{ $env.KINETIC_API_KEY }}"
               }
             ]
           }
-        }
+        },
+        "bodyType": "raw",
+        "body": "={\n  \"audioFilePath\": \"{{ $('Save MP3').item.json.fileName }}\",\n  \"language\": \"{{ $('MP3 Upload Webhook').item.json.body?.language || 'en' }}\",\n  \"configOverrides\": { \"reveal\": { \"style\": \"{{ $('MP3 Upload Webhook').item.json.body?.style || 'word-pop' }}\" } }\n}"
       },
       "id": "create-job",
       "name": "POST /render",
@@ -93,20 +93,20 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:3000' }}/jobs/{{ $('POST /render').item.json.job_id }}",
+        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:4000' }}/render/{{ $('POST /render').item.json.jobId }}",
         "options": {
           "headers": {
             "entries": [
               {
                 "name": "X-API-Key",
-                "value": "={{ .KINETIC_API_KEY }}"
+                "value": "={{ $env.KINETIC_API_KEY }}"
               }
             ]
           }
         }
       },
       "id": "check-job",
-      "name": "GET /jobs/:id",
+      "name": "GET /render/:jobId",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -191,7 +191,7 @@
     },
     {
       "parameters": {
-        "fileName": "={{ $('GET /jobs/:id').item.json.output }}",
+        "fileName": "={{ $('GET /render/:jobId').item.json.outputPath }}",
         "dataPropertyName": "file",
         "options": {}
       },
@@ -267,14 +267,14 @@
       "main": [
         [
           {
-            "node": "GET /jobs/:id",
+            "node": "GET /render/:jobId",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "GET /jobs/:id": {
+    "GET /render/:jobId": {
       "main": [
         [
           {

@@ -1,0 +1,48 @@
+# Solid lime-green / dark-text look for vertical-show and orbit.
+# These styles draw their own waveform/spectrum — pair them with a solid
+# or gradient background, not waveform (both would render).
+
+resolution:
+  width: 1080
+  height: 1920
+  fps: 30
+
+reveal:
+  style: orbit
+
+text:
+  font: Space Grotesk
+  size: 96
+  color: "#0d1f0d"
+  highlightColor: "#0d1f0d"
+  strokeColor: "#0d1f0d"
+  strokeWidth: 0
+  position: lower-third
+
+background:
+  type: solid
+  color: "#b8f818"
+  gradient:
+    from: "#b8f818"
+    to: "#8ed10d"
+    angle: 180
+  mediaPath: ""
+  waveform:
+    color: "#0d1f0d"
+
+show:
+  title: "Sarah Connor"
+  coverImagePath: ""
+  description: "On Building Calm Software"
+  episodeLabel: "EP. 12"
+  totalChapters: 12
+
+output:
+  directory: output
+  container: mp4
+  crf: 18
+
+transcription:
+  mode: poll
+  intervalMs: 5000
+  timeoutMs: 900000

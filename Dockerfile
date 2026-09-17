@@ -13,6 +13,6 @@ COPY . .
 
 RUN npx tsc
 
-EXPOSE 3000
+EXPOSE 4000
 
-CMD ["npm", "run", "server"]
+CMD ["npm", "run", "webhook"]

@@ -1,12 +1,12 @@
-import { runPipeline } from "../src/pipeline/run.js";
-import { readCache, writeCache, transcriptCachePath } from "../src/cache.js";
-import { hashFile } from "../src/cache.js";
+import { runPipeline } from "../src/pipeline.js";
+import { writeCache, transcriptCachePath, hashFile } from "../src/cache.js";
+import { loadConfig } from "../src/config.js";
 import fs from "node:fs";
 
 const input = "public/input.wav";
-fs.mkdirSync("cache", { recursive: true });
+fs.mkdirSync(".cache", { recursive: true });
 const h = hashFile(input);
-const cacheFile = transcriptCachePath("./cache", h, "en");
+const cacheFile = transcriptCachePath(h, "en");
 
 writeCache(cacheFile, {
   uniscribeId: "smoke-test",
@@ -40,6 +40,7 @@ writeCache(cacheFile, {
   },
 });
 
-runPipeline(input, "config/config.yml", "en").then((r) => {
+const config = loadConfig();
+runPipeline({ inputPath: input, config, language: "en" }).then((r) => {
   console.log("SMOKE RESULT", r);
 });

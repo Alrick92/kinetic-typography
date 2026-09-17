@@ -1,0 +1,56 @@
+# Kinetic Typography pipeline configuration.
+# Override any subset via --config (CLI) or configOverrides (webhook) —
+# overrides are shallow-merged per top-level section.
+
+resolution:
+  width: 1080
+  height: 1920
+  fps: 30
+
+# reveal.style: word-pop | karaoke | focus-word | clean-feed | lyrics-scroll | vertical-show | orbit
+reveal:
+  style: word-pop
+
+text:
+  font: Space Grotesk    # loaded via @remotion/google-fonts; other names fall back to a generic stack
+  size: 110
+  color: "#111111"
+  highlightColor: "#1a6b1a"
+  strokeColor: "#000000"
+  strokeWidth: 6
+  position: center       # center | lower-third
+
+background:
+  # type: solid | gradient | video | waveform
+  # video takes a looping video OR a static image via mediaPath
+  # (copied into remotion/public/backgrounds/ automatically at render time)
+  type: solid
+  color: "#d3d3d3"
+  gradient:
+    from: "#0f2027"
+    to: "#2c5364"
+    angle: 180
+  mediaPath: ""
+  waveform:
+    color: "#f5c518"
+
+# Only used by vertical-show and orbit; ignored by every other reveal style.
+show:
+  title: ""
+  coverImagePath: ""     # renders a solid placeholder circle in highlightColor when unset
+  description: ""
+  episodeLabel: ""
+  totalChapters: 12      # orbit progress dots
+
+output:
+  directory: output
+  container: mp4
+  crf: 18
+
+# UniScribe transcription behavior.
+# mode "webhook" additionally registers a callback (requires PUBLIC_BASE_URL)
+# but polling remains the synchronous completion mechanism.
+transcription:
+  mode: poll
+  intervalMs: 5000
+  timeoutMs: 900000

@@ -1,249 +1,222 @@
 # Kinetic Typography Pipeline
 
-Converts an audio or video file (podcast, voiceover, lecture) into a hypnotype-style
-kinetic typography MP4 — word-synced animated text, fully automated end to end.
-Powered by [UniScribe](https://www.uniscribe.co) (transcription) and
-[Remotion](https://www.remotion.dev) (rendering). Self-hosted, no third-party
-render APIs.
+Turns an audio file into a kinetic-typography MP4 (word-synced animated text over
+a configurable background), using [UniScribe](https://www.uniscribe.co) for
+transcription and [Remotion](https://www.remotion.dev) for rendering.
+Self-hosted — no third-party render APIs.
 
-- Input: mp3/m4a/wav/aac/ogg/opus/flac, or mp4/webm/mov (audio is extracted)
-- Output: MP4 (H.264 + AAC), vertical 1080x1920 or landscape 1920x1080, configurable
-- Triggers: CLI, or an n8n webhook that accepts an uploaded MP3 and returns the finished video
+## How it works
 
----
+```
+audio file → UniScribe (transcribe) → timestamp parse (+ interpolation fallback)
+           → animation schedule (word-pop | karaoke) → Remotion render → MP4
+```
 
-## 1. Quick start
+- **Transcription** (`src/uniscribe/client.ts`): uploads the file via UniScribe's
+  pre-signed URL flow, creates a transcription job, and either polls
+  `GET /api/v1/transcriptions/{id}/status` or waits for a webhook callback
+  (`transcription.mode: "webhook"` + `PUBLIC_BASE_URL`).
+- **Timestamp parsing** (`src/transcript/parse.ts`): UniScribe returns
+  word-level timestamps in `segments[].words[]`. If a given response only has
+  phrase-level timestamps, `src/transcript/interpolate.ts` distributes each
+  phrase's duration across its words proportionally to word length.
+- **Animation schedule** (`src/animation/schedule.ts`): converts the transcript
+  into either a flat list of word cues (used by `word-pop`, `focus-word`,
+  `clean-feed`, and the caption strip in `vertical-show`/`orbit`) or phrase cues
+  with per-word highlight windows (`karaoke`).
+- **Rendering** (`src/render/renderVideo.ts` + `remotion/`): bundles the Remotion
+  project and renders the composition matching `reveal.style` to MP4
+  (H.264/AAC).
+- **Orchestration**: `src/cli.ts` for one-shot CLI runs, `src/webhook.ts` for an
+  HTTP API (direct file upload or n8n-friendly server-side path — full reference
+  in [docs/API.md](docs/API.md)). Transcripts are cached to disk keyed by a
+  SHA-256 hash of the audio file, so re-runs (or a crash after transcription but
+  before render) never re-call UniScribe for the same file.
+
+## Setup
 
 ```bash
 npm install
-npx remotion browser ensure          # one-time, downloads headless Chrome
-cp .env.example .env                 # fill in UNISCRIBE_API_KEY
-npm run render -- path/to/audio.mp3  # full pipeline
+cp .env.example .env   # fill in UNISCRIBE_API_KEY
 ```
 
-The finished video lands in `output/<basename>-kinetic.mp4`.
-
-## 2. Environment variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `UNISCRIBE_API_KEY` | yes | — | UniScribe API key (Settings → API Keys). Needs an active subscription/LTD plan. |
-| `LANGUAGE_CODE` | no | `en` | ISO code of the spoken language (63 supported by UniScribe). |
-| `PORT` | no | `3000` | Port for the webhook service. |
-| `UNISCRIBE_WEBHOOK_URL` | no | — | Public HTTPS URL (e.g. your NGINX-hosted webhook) if you want UniScribe completion callbacks instead of pure polling. |
-
-Rate limits on the UniScribe API key: 60 requests/minute, 1000/day. Every pipeline
-run after the first for the same file + language skips UniScribe entirely
-(transcript cached by sha256), so token-cost per view is zero.
-
-## 3. CLI usage
+Verify your UniScribe API key/tier and inspect the real timestamp granularity
+your account gets back before relying on it:
 
 ```bash
-npm run render -- <input-file> [config-path]
-npm run render -- podcast.mp3                      # default config/config.yml
-npm run render -- podcast.mp3 config/landscape.yml # alternate config
-npm run spike                                      # validate key + config, no billing
-npm run server                                     # start the n8n webhook listener
+npm run test:uniscribe
+npm run test:uniscribe -- --transcribe <audio-file>   # full check (costs plan minutes)
 ```
 
-Exit codes: `0` success, `1` pipeline failure, `2` usage error. All stages emit
-newline-delimited JSON to stdout, e.g.:
+### Required environment variables (.env)
+
+| Variable | Description |
+|---|---|
+| `UNISCRIBE_API_KEY` | Your UniScribe API key (Basic tier or above required for API access) |
+| `UNISCRIBE_BASE_URL` | Defaults to `https://api.uniscribe.co` |
+| `CACHE_DIR` | Where transcripts/job-ids are cached (default `./.cache`) |
+| `OUTPUT_DIR` | Not read directly — output directory is set in `config/default.yaml` under `output.directory` |
+| `WEBHOOK_PORT` | Port for the HTTP API server (default `4000`) |
+| `PUBLIC_BASE_URL` | Public URL this container is reachable at — only required if you trigger renders with transcription `mode: "webhook"` |
+| `API_KEY` | Optional shared-secret for the HTTP API — see [docs/API.md](docs/API.md) |
+| `LOG_LEVEL` | pino log level (default `info`) |
+
+## CLI usage
+
+```bash
+npm run cli -- render --input ./data/episode.mp3
+npm run cli -- render --input ./data/episode.mp3 --config ./config/karaoke.yaml
+npm run cli -- render --input ./data/episode.mp3 --output episode-final.mp4 --language en
+```
+
+Exit codes are non-zero on any failure, with the failing stage and a
+human-readable message logged (see `src/errors.ts` for the full list — invalid
+API key, plan-tier access denied, rate limit, unsupported format, empty/failed
+transcript, render crash).
+
+## HTTP API / n8n usage
+
+Start the server (`npm run webhook`, or via Docker — see below). Full endpoint
+reference, request/response shapes, auth, and error handling:
+[docs/API.md](docs/API.md).
+
+Two ways to trigger a render:
+
+**Direct upload** — `POST /render` as multipart/form-data with an audio file
+field. Works from any HTTP client; no shared filesystem needed.
+
+```bash
+curl -X POST http://localhost:4000/render -F "audio=@episode.mp3" -F "style=karaoke"
+```
+
+**Server-side path** — `POST /render` as JSON with `audioFilePath` pointing to a
+file already on the server's filesystem. This is the n8n-friendly mode: write
+the incoming audio into the shared `./data` volume first (e.g. via n8n's "Move
+Binary Data" + "Write Binary File" nodes), then call this endpoint with that
+path.
 
 ```json
-{"ts":"2026-09-16T23:01:01Z","level":"info","stage":"render","message":"progress 100%"}
+{ "audioFilePath": "/app/data/episode.mp3", "configOverrides": { "reveal": { "style": "karaoke" } } }
 ```
 
-Stages: `pipeline`, `uniscribe-upload`, `uniscribe-submit`, `transcription`,
-`transcript-cache`, `render`, `webhook-job`, `server`.
+Both return `202 { jobId, statusUrl, downloadUrl }` immediately. Poll
+`GET /render/:jobId` until `status` is `completed`, then fetch the file from
+`GET /render/:jobId/download` (or read `outputPath` directly if you share a
+volume).
 
-## 4. Configuration (`config/config.yml`)
+In n8n: an HTTP Request node posts to `/render`, then a polling loop (n8n's
+"Wait" node + another HTTP Request) checks `/render/:jobId` until done.
 
-```yaml
-resolution:
-  width: 1080        # 1080x1920 vertical | 1920x1080 landscape
-  height: 1920
-  fps: 30
+A ready-to-import n8n workflow doing exactly this — upload an audio file with
+optional style/language fields, wait, and get the finished MP4 back as one
+synchronous submission — is at `n8n/kinetic-render-workflow.json`
+(path-based) and `n8n/kinetic-video-upload-workflow.json` (binary upload), both
+documented in [docs/N8N_WORKFLOW.md](docs/N8N_WORKFLOW.md).
 
-reveal:
-  style: popin       # see styles table below
+## Configuration
 
-text:
-  fontFamily: Inter
-  size: 110
-  color: "#111111"
-  highlightColor: "#1a6b1a"
-  strokeColor: "#000000"
-  strokeWidth: 6
-  position: center   # center | lower-third
-
-background:
-  type: solid        # solid | gradient | image | video | waveform
-  solid: "#d3d3d3"
-  gradient: { from: "#0f2027", to: "#2c5364", direction: vertical }
-  image: ""          # path inside public/, e.g. public/bg.jpg (falls back to solid if unset)
-  video: ""          # path inside public/, e.g. public/bg-loop.mp4 (same fallback)
-  waveform:
-    color: "#f5c518"
-
-output:
-  directory: output
-  container: mp4
-  crf: 18
-
-branding:            # used by the orbit style
-  host: Sarah Connor
-  tag: On building calm software
-  episode: EP. 12
-  coverImage: ""     # path inside public/, falls back to a monogram disc
-```
-
-Media referenced here must exist in the project's `public/` directory. Any unset
-image/video path falls back to the `solid` background (light grey default) — no
-code changes needed to switch styling.
+All rendering/styling knobs live in `config/default.yaml` (see that file for the
+full schema: output resolution/orientation/fps, reveal style,
+font/colors/stroke/position, background type, UniScribe poll timing). Override
+any subset via `--config` (CLI) or `configOverrides` (webhook) — overrides are
+shallow-merged per top-level section, no code changes needed.
 
 ### Reveal styles
 
-| Style | Look | Best for |
+| Style | Look |
+|---|---|
+| `word-pop` | One word centered on screen at a time, replaced as the audio progresses |
+| `karaoke` | Full sentence/segment visible, active word rendered in `highlightColor` |
+| `focus-word` | Word-pop, plus faded previous/next word context above and below, the active word on a rounded `highlightColor` card, an elapsed/total timer, and a bottom progress bar |
+| `clean-feed` | Continuous flowing paragraph — a window of words around the current one, spoken word bold and in `highlightColor`, already-spoken words dimmed, upcoming words dimmer still. No scrolling/layout measurement; the window just shifts forward |
+| `lyrics-scroll` | Song-lyrics style — one line (transcript phrase) per line, vertically centered; the current line is bold/highlighted, previous lines sit above (dimmed, already scrolled past), upcoming lines below. Smoothly animates to the next line's position each time the active phrase advances, rather than jumping instantly |
+| `vertical-show` | A "show card" (circular cover image, title, horizontal waveform, description) in the upper frame, with word-pop captions in the lower third. Needs `show.title` / `show.coverImagePath` / `show.description` (see below) |
+| `orbit` | Circular avatar with a radial audio-spectrum spike ring, title, description, episode label, and a chapter/progress dot indicator, with word-pop captions in the lower third. Needs the same `show.*` fields, plus `show.totalChapters` for the dots |
+
+`vertical-show` and `orbit` already draw their own waveform/spectrum — pair them
+with `background.type: solid` or `gradient`, not `waveform` (both would render).
+A ready-made solid lime-green/dark-text look matching that combination is in
+`config/presets/lime-show.yaml`:
+
+```bash
+npm run cli -- render -i data/episode.mp3 --config config/presets/lime-show.yaml --style orbit \
+  --title "Sarah Connor" --cover-image data/sarah.jpg \
+  --description "On Building Calm Software" --episode-label "EP. 12"
+```
+
+### Show metadata (`show.*`, and `--title` / `--cover-image` / `--description` / `--episode-label`)
+
+Only used by `vertical-show` and `orbit`; ignored by every other reveal style.
+
+| Field | CLI flag | Default when unset |
 |---|---|---|
-| `popin` | Short word groups popping in with spring physics | General use |
-| `karaoke` | Full sentence visible, active word highlighted | Singalongs, lectures |
-| `focus-word` | One giant boxed word at a time, next-word teaser | Motivation, hooks, rants |
-| `clean-feed` | Minimal centered typing, ~7-word groups, blinking cursor | Shorts, clean thumbs |
-| `orbit` | Radial 72-bar spectrum around cover art + title card | Podcasts, audiograms |
+| `show.title` | `--title` | audio filename (without extension) |
+| `show.coverImagePath` | `--cover-image` | none — renders a solid placeholder circle in `highlightColor` |
+| `show.description` | `--description` | hidden if unset |
+| `show.episodeLabel` | `--episode-label` | hidden if unset |
+| `show.totalChapters` | — (config only) | `12` — dot count in the Orbit progress indicator |
 
-### Backgrounds
+Via the webhook, set these under `configOverrides.show` in the `POST /render`
+body instead of dedicated fields.
 
-| Type | Value | Fallback |
-|---|---|---|
-| `solid` | hex color | — |
-| `gradient` | from/to + vertical\|horizontal\|diagonal | solid color |
-| `image` | file in `public/` | solid color (light grey default) |
-| `video` | looped file in `public/` | solid color (light grey default) |
-| `waveform` | bottom-frequency bars synced to amplitude | solid color |
+### Background types
 
-## 5. Webhook service (for n8n / HTTP automation)
+| Type | Behavior |
+|---|---|
+| `solid` | Flat `background.color` |
+| `gradient` | Linear gradient between `background.gradient.from`/`to` at `angle` degrees |
+| `video` | Looping video **or** static image; set `background.mediaPath` to a file path (it's copied into `remotion/public/backgrounds/` automatically at render time) |
+| `waveform` | Animated audio-amplitude bars in `background.waveform.color` over `background.color`, driven by `@remotion/media-utils` |
 
-```bash
-npm run server
-```
+## Extending
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/render` | POST | JSON body `{ "file_path": "/media/audio.mp3", "config_path": "config/config.yml", "language": "en" }` → `202 { "job_id": "...", "status": "queued" }`. Jobs run in-process, async. |
-| `/jobs/:id` | GET | `{ id, status: queued\|processing\|completed\|failed, output, error }` |
-| `/health` | GET | `{ ok: true }` liveness check (unauthenticated) |
+- **New reveal style**: add a composition under `remotion/compositions/`,
+  register it in `remotion/Root.tsx`, add the style to `RevealStyle` in
+  `src/types.ts` and to `REVEAL_STYLE_TO_COMPOSITION` in
+  `src/render/renderVideo.ts`. It'll get the flat word-cue shape from
+  `src/animation/schedule.ts` automatically unless you add it to
+  `PHRASE_BASED_STYLES` there (for karaoke-style phrase grouping instead).
+- **New background type**: add a component under `remotion/backgrounds/`, wire
+  it into `remotion/backgrounds/Background.tsx`'s switch, and extend the
+  `background` section of `config/default.yaml` + the zod schema in
+  `src/config.ts`.
+- **Fonts**: `text.font` defaults to `Space Grotesk`, actually loaded via
+  `@remotion/google-fonts` in `remotion/shared/fonts.ts` (not just a CSS
+  `font-family` string) so it renders correctly in headless Chrome without
+  depending on the OS having it installed. Any other configured font name falls
+  back to a generic system-font stack. To wire up a different Google Font the
+  same way, swap the import in `fonts.ts` for another
+  `@remotion/google-fonts/<FontName>` subpackage.
 
-### API-key protection
-
-Set `WEBHOOK_API_KEY` in `.env` and both `/render` and `/jobs` require it:
-
-```bash
-curl -X POST https://kinetic.example.com/render \
-  -H "X-API-Key: <WEBHOOK_API_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{"file_path": "/media/podcast.mp3"}'
-```
-
-- Key comparison is timing-safe; an `Authorization: Bearer <key>` header is also accepted
-- If `WEBHOOK_API_KEY` is unset the server **warns loudly and runs unprotected** — only acceptable behind a trusted network. In n8n workflows set the `KINETIC_API_KEY` env to the same value; both included workflow JSONs already send `X-API-Key` on every HTTP request node.
-
-Example round trip:
+## Docker
 
 ```bash
-curl -X POST http://localhost:3000/render \
-  -H "Content-Type: application/json" \
-  -d '{"file_path": "/media/podcast.mp3"}'
-# -> {"job_id":"179cb93012cc","status":"queued"}
-
-curl http://localhost:3000/jobs/179cb93012cc
-# -> {"id":"179cb93012cc","status":"completed","output":"/app/output/...mp4"}
-```
-
-Behind NGINX Proxy Manager: point a hostname at the container's port 3000.
-Jobs are idempotent — repeated triggers for identical files reuse cached transcripts.
-
-## 6. n8n workflow
-
-Two ready-to-import workflow files live in `n8n/`:
-
-### a) `kinetic-video-upload-workflow.json` (recommended)
-
-Accepts an **uploaded MP3 as binary** in a webhook and returns the **finished MP4
-as binary** when the render completes:
-
-```
-Webhook (multipart MP3 upload, POST /webhook/kinetic-video)
-  → Write Binary File (saves MP3 to the shared media volume)
-  → POST /render (file_path of the saved MP3)
-  → Wait 15s → GET /jobs/:id
-      ├─ completed → Read Binary File (output MP4) → Respond with video binary
-      ├─ failed    → fail the execution with the pipeline stage error
-      └─ processing → loop back and poll again
-```
-
-Import it (Workflows → Import from File), then set:
-
-- `KINETIC_API_URL` n8n variable/environment to the render service
-  (`http://kinetic:3000` if same Docker network, or the proxied public URL)
-- The "Write Binary File" / "Read Binary File" paths must be on a volume the
-  render service also mounts (see `docker-compose.yml`, `/media`)
-
-### b) `kinetic-render-workflow.json` (path-based variant)
-
-Same shape, but the webhook takes a JSON body with a `file_path` already visible
-to the render service and returns the output path JSON. Handy when upstream
-systems already side-loaded the file.
-
-## 7. Docker deployment
-
-Dockerfile + docker-compose.yml included (target: Linux VPS, no GPU required).
-
-```bash
+cp .env.example .env   # fill in UNISCRIBE_API_KEY, PUBLIC_BASE_URL if using webhook mode
 docker compose up -d --build
 ```
 
-Mounts: `output/`, `cache/`, `config/` (rw) and a media volume (ro). Expose only
-port 3000 via NGINX Proxy Manager.
+Drop audio files into `./data` on the host (mounted at `/app/data` in the
+container) before calling `POST /render` with that in-container path. Rendered
+MP4s land in `./output` on the host.
 
-For render throughput: Remotion uses headless Chrome on CPU; a 46s clip renders
-in ~2.5x real time on typical VPS cores. Scale threads via the container command
-or run multiple replicas behind the proxy.
+For one-off CLI renders inside the same image:
 
-## 8. Error handling
+```bash
+docker compose run --rm kinetic-typography npx tsx src/cli.ts render -i /app/data/episode.mp3
+```
 
-Errors surface as stage-qualified messages and non-zero exit codes on the CLI,
-HTTP error responses on the webhook service, and `status: "failed"` plus
-`error` on the job endpoint. Common failure modes are translated to actionable
-messages:
+## Known open items (flagged per the original requirements doc)
 
-| Failing stage | Meaning |
-|---|---|
-| `uniscribe-auth` | Invalid/missing API key |
-| `uniscribe-plan` | Plan lacks API access (requires active subscription/LTD) |
-| `uniscribe-quota` | Minutes used up on your plan |
-| `uniscribe-upload` | Pre-signed storage upload failed |
-| `uniscribe-rate-limited` | 429 from UniScribe (60/min, 1000/day caps) |
-| `transcription` | UniScribe task failed or polling timed out |
-| `input` | Missing/unsupported file |
-| `render` | Remotion render crashed |
-| `pipeline` | Other failures |
-
-## 9. Extending the pipeline
-
-- **New reveal style**: add a React component in
-  `src/remotion/KineticComposition.tsx`, add the style name to the `z.enum`
-  in `src/types.ts` and `src/remotion/props.ts`, wire it into
-  `KineticComposition`'s conditional render, and add it to the config README table.
-- **New background type**: extend `Background` in the same file + `z.enum` lists.
-- **Timestamp data**: word-level timings come straight from UniScribe's
-  `result.segments[].words`. If a transcript ships phrase-level only, per-word
-  timing is interpolated by character proportion within each phrase and the
-  pipeline logs `granularity: phrase`.
-
-## 10. Render engine decision
-
-Remotion was chosen over an FFmpeg drawtext/ASS pipeline because React gives
-precise per-word spring animations, staggered typing reveals, and the radial
-spectrum orbit — none of which are practical via FFmpeg subtitle filters
-(~would require rendering per-word PNGs or heavily hacked ASS templates).
-CPU-only headless Chrome rendering is fast enough for VPS deployments.
+- UniScribe's public OpenAPI docs (confirmed at build time) document word-level
+  timestamps in `segments[].words[]`; `npm run test:uniscribe` re-verifies this
+  against your actual account/plan before you rely on it, since the docs are
+  marked "Beta" and may drift.
+- Rate limits are documented as 60 req/min / 1000 req/day per API key — the
+  client surfaces 429s as `RateLimitError` but does not currently auto-retry
+  with backoff; add that in `UniScribeClient.request` if you hit it in practice.
+- Remotion was chosen over the FFmpeg drawtext/ASS-subtitle fallback: it gives
+  full React-based control over per-word animation (spring easing, karaoke
+  highlighting, waveform visualization) without hand-rolling ASS timing math, at
+  the cost of a heavier Docker image (headless Chromium) and slower
+  render-per-second-of-video than pure FFmpeg filters. Revisit if VPS CPU/RAM
+  becomes a bottleneck on long files.

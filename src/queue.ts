@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { logInfo, logError } from "../logger.js";
+import { logInfo, logError } from "./logger.js";
 
 export type JobStatus = "queued" | "processing" | "completed" | "failed";
 
@@ -11,7 +11,7 @@ export type Job = {
   finishedAt?: number;
   position?: number;
   error?: string;
-  output?: string;
+  outputPath?: string;
 };
 
 type QueueTask = {
@@ -75,13 +75,13 @@ function pump() {
       .run()
       .then((outputPath) => {
         job.status = "completed";
-        job.output = outputPath;
+        job.outputPath = outputPath;
         job.finishedAt = Date.now();
         logInfo("queue", `job ${job.id} completed: ${outputPath}`);
       })
       .catch((err: unknown) => {
-        job.status = "failed";
         job.error = err instanceof Error ? err.message : String(err);
+        job.status = "failed";
         job.finishedAt = Date.now();
         logError("queue", `job ${job.id} failed: ${job.error}`);
       })

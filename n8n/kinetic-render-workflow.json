@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "content": "## Kinetic Typography Pipeline\nPass `file_path` (path visible to the render service) and optional `config_path` / `language` in the payload."
+        "content": "## Kinetic Typography Pipeline\nPass `file_path` (a path visible to the render service, e.g. `/app/data/episode.mp3`) plus optional `style` / `language` in the JSON payload.\n\nSet n8n env `KINETIC_API_URL` (default http://kinetic:4000) and `KINETIC_API_KEY` to the render server's `API_KEY`."
       },
       "id": "sticky-note",
       "name": "Usage",
@@ -29,26 +29,25 @@
       "position": [
         -280,
         -220
-      ],
-      "parameters_note": true
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:3000' }}/render",
+        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:4000' }}/render",
         "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"file_path\": \"{{ $json.body.file_path }}\",\n  \"config_path\": \"{{ $json.body.config_path || 'config/config.yml' }}\",\n  \"language\": \"{{ $json.body.language || 'en' }}\"\n}",
         "options": {
           "headers": {
             "entries": [
               {
                 "name": "X-API-Key",
-                "value": "={{ .KINETIC_API_KEY }}"
+                "value": "={{ $env.KINETIC_API_KEY }}"
               }
             ]
           }
-        }
+        },
+        "bodyType": "raw",
+        "body": "={\n  \"audioFilePath\": \"{{ $json.body.file_path }}\",\n  \"language\": \"{{ $json.body.language || 'en' }}\",\n  \"configOverrides\": { \"reveal\": { \"style\": \"{{ $json.body.style || 'word-pop' }}\" } }\n}"
       },
       "id": "create-job",
       "name": "POST /render",
@@ -76,20 +75,20 @@
     },
     {
       "parameters": {
-        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:3000' }}/jobs/{{ $('POST /render').item.json.job_id }}",
+        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:4000' }}/render/{{ $('POST /render').item.json.jobId }}",
         "options": {
           "headers": {
             "entries": [
               {
                 "name": "X-API-Key",
-                "value": "={{ .KINETIC_API_KEY }}"
+                "value": "={{ $env.KINETIC_API_KEY }}"
               }
             ]
           }
         }
       },
       "id": "check-job",
-      "name": "GET /jobs/:id",
+      "name": "GET /render/:jobId",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -120,7 +119,7 @@
         "options": {}
       },
       "id": "is-done",
-      "name": "Completed or Failed?",
+      "name": "Completed?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
@@ -130,7 +129,7 @@
     },
     {
       "parameters": {
-        "errorMessage": "={{ $('GET /jobs/:id').item.json.error }}"
+        "errorMessage": "={{ $('GET /render/:jobId').item.json.error }}"
       },
       "id": "raise-error",
       "name": "Raise Error",
@@ -144,7 +143,7 @@
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { output: $('GET /jobs/:id').item.json.output } | JSON.stringify }}",
+        "responseBody": "={{ { outputPath: $('GET /render/:jobId').item.json.outputPath } | JSON.stringify }}",
         "options": {}
       },
       "id": "respond-success",
@@ -229,25 +228,25 @@
       "main": [
         [
           {
-            "node": "GET /jobs/:id",
+            "node": "GET /render/:jobId",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "GET /jobs/:id": {
+    "GET /render/:jobId": {
       "main": [
         [
           {
-            "node": "Completed or Failed?",
+            "node": "Completed?",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Completed or Failed?": {
+    "Completed?": {
       "main": [
         [
           {

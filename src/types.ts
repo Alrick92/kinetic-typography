@@ -1,57 +1,24 @@
-import { z } from "zod";
+export const REVEAL_STYLES = [
+  "word-pop",
+  "karaoke",
+  "focus-word",
+  "clean-feed",
+  "lyrics-scroll",
+  "vertical-show",
+  "orbit",
+] as const;
 
-export const configSchema = z.object({
-  resolution: z.object({
-    width: z.number().int().min(360).max(3840),
-    height: z.number().int().min(360).max(3840),
-    fps: z.number().int().min(24).max(60),
-  }),
-  reveal: z.object({
-    style: z.enum(["popin", "karaoke", "focus-word", "clean-feed", "orbit"]),
-  }),
-  text: z.object({
-    fontFamily: z.string(),
-    size: z.number(),
-    color: z.string(),
-    highlightColor: z.string(),
-    strokeColor: z.string(),
-    strokeWidth: z.number(),
-    position: z.enum(["center", "lower-third"]),
-  }),
-  background: z.object({
-    type: z.enum(["solid", "gradient", "image", "video", "waveform"]),
-    gradient: z
-      .object({
-        from: z.string(),
-        to: z.string(),
-        direction: z.enum(["vertical", "horizontal", "diagonal"]),
-      })
-      .optional(),
-    solid: z.string().optional(),
-    image: z.string().optional(),
-    video: z.string().optional(),
-    waveform: z
-      .object({
-        color: z.string(),
-      })
-      .optional(),
-  }),
-  output: z.object({
-    directory: z.string(),
-    container: z.string(),
-    crf: z.number(),
-  }),
-  branding: z
-    .object({
-      host: z.string().optional(),
-      tag: z.string().optional(),
-      episode: z.string().optional(),
-      coverImage: z.string().optional(),
-    })
-    .optional(),
-});
+export type RevealStyle = (typeof REVEAL_STYLES)[number];
 
-export type AppConfig = z.infer<typeof configSchema>;
+export const BACKGROUND_TYPES = ["solid", "gradient", "video", "waveform"] as const;
+
+export type BackgroundType = (typeof BACKGROUND_TYPES)[number];
+
+export const PHRASE_BASED_STYLES = ["karaoke", "lyrics-scroll"] as const;
+
+export function isPhraseBased(style: RevealStyle): boolean {
+  return (PHRASE_BASED_STYLES as readonly string[]).includes(style);
+}
 
 export type WordTiming = {
   start: number;
@@ -59,15 +26,47 @@ export type WordTiming = {
   text: string;
 };
 
-export type Sentence = {
+export type PhraseTiming = {
   start: number;
   end: number;
-  words: WordTiming[];
   text: string;
+  words: WordTiming[];
 };
 
 export type TranscriptSchedule = {
   granularity: "word" | "phrase";
   words: WordTiming[];
-  sentences: Sentence[];
+  phrases: PhraseTiming[];
+};
+
+export type ShowMeta = {
+  title: string;
+  coverImagePath: string;
+  description: string;
+  episodeLabel: string;
+  totalChapters: number;
+};
+
+export type AppConfig = {
+  resolution: { width: number; height: number; fps: number };
+  reveal: { style: RevealStyle };
+  text: {
+    font: string;
+    size: number;
+    color: string;
+    highlightColor: string;
+    strokeColor: string;
+    strokeWidth: number;
+    position: "center" | "lower-third";
+  };
+  background: {
+    type: BackgroundType;
+    color: string;
+    gradient: { from: string; to: string; angle: number };
+    mediaPath: string;
+    waveform: { color: string };
+  };
+  show: ShowMeta;
+  output: { directory: string; container: string; crf: number };
+  transcription: { mode: "poll" | "webhook"; intervalMs: number; timeoutMs: number };
 };
