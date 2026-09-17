@@ -1,9 +1,10 @@
 import express from "express";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { runPipeline } from "../pipeline/run.js";
-import { logInfo, logError, logWarn } from "../logger.js";
+import { submitJob, getJob, queueStats } from "./queue.js";
+import { logInfo, logWarn } from "../logger.js";
 
 const app = express();
 app.use(express.json());
@@ -36,15 +37,6 @@ function requireApiKey(
   res.status(401).json({ error: "Invalid or missing API key (send X-API-Key header)" });
 }
 
-type Job = {
-  id: string;
-  status: "queued" | "processing" | "completed" | "failed";
-  error?: string;
-  output?: string;
-};
-
-const jobs = new Map<string, Job>();
-
 app.post("/render", requireApiKey, (req, res) => {
   const { file_path, config_path, language } = req.body as {
     file_path?: string;
@@ -60,32 +52,38 @@ app.post("/render", requireApiKey, (req, res) => {
     res.status(400).json({ error: `File not found: ${inputPath}` });
     return;
   }
-  const jobId = randomBytes(16).toString("hex").slice(0, 12);
-  const job: Job = { id: jobId, status: "queued" };
-  jobs.set(jobId, job);
-  res.status(202).json({ job_id: jobId, status: "queued" });
-
-  job.status = "processing";
-  runPipeline(inputPath, config_path ?? "config/config.yml", language ?? "en")
-    .then((result) => {
-      job.status = "completed";
-      job.output = result.outputPath;
-      logInfo("webhook-job", `job ${jobId} completed: ${result.outputPath}`);
-    })
-    .catch((err: unknown) => {
-      job.status = "failed";
-      job.error = err instanceof Error ? err.message : String(err);
-      logError("webhook-job", `job ${jobId} failed: ${job.error}`);
-    });
+  const job = submitJob(() =>
+    runPipeline(inputPath, config_path ?? "config/config.yml", language ?? "en").then(
+      (result) => result.outputPath
+    )
+  );
+  res.status(202).json({
+    job_id: job.id,
+    status: job.status,
+    position: job.position,
+  });
 });
 
 app.get("/jobs/:id", requireApiKey, (req, res) => {
-  const job = jobs.get(req.params.id);
+  const job = getJob(req.params.id);
   if (!job) {
     res.status(404).json({ error: "job not found" });
     return;
   }
-  res.json({ id: job.id, status: job.status, output: job.output, error: job.error });
+  res.json({
+    id: job.id,
+    status: job.status,
+    position: job.status === "queued" ? job.position : undefined,
+    output: job.output,
+    error: job.error,
+    created_at: new Date(job.createdAt).toISOString(),
+    started_at: job.startedAt ? new Date(job.startedAt).toISOString() : undefined,
+    finished_at: job.finishedAt ? new Date(job.finishedAt).toISOString() : undefined,
+  });
+});
+
+app.get("/queue", requireApiKey, (_req, res) => {
+  res.json(queueStats());
 });
 
 app.get("/health", (_req, res) => {
