@@ -1,0 +1,294 @@
+{
+  "name": "Kinetic Typography Render",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kinetic-render",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "kinetic-render"
+    },
+    {
+      "parameters": {
+        "content": "## Kinetic Typography Pipeline\nPass `file_path` (path visible to the render service) and optional `config_path` / `language` in the payload."
+      },
+      "id": "sticky-note",
+      "name": "Usage",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        -220
+      ],
+      "parameters_note": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:3000' }}/render",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"file_path\": \"{{ $json.body.file_path }}\",\n  \"config_path\": \"{{ $json.body.config_path || 'config/config.yml' }}\",\n  \"language\": \"{{ $json.body.language || 'en' }}\"\n}",
+        "options": {
+          "headers": {
+            "entries": [
+              {
+                "name": "X-API-Key",
+                "value": "={{ .KINETIC_API_KEY }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "create-job",
+      "name": "POST /render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "wait-poll",
+      "name": "Wait 15s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        0
+      ],
+      "webhookId": "kinetic-poll-wait"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:3000' }}/jobs/{{ $('POST /render').item.json.job_id }}",
+        "options": {
+          "headers": {
+            "entries": [
+              {
+                "name": "X-API-Key",
+                "value": "={{ .KINETIC_API_KEY }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "check-job",
+      "name": "GET /jobs/:id",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-completed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "is-done",
+      "name": "Completed or Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $('GET /jobs/:id').item.json.error }}"
+      },
+      "id": "raise-error",
+      "name": "Raise Error",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { output: $('GET /jobs/:id').item.json.output } | JSON.stringify }}",
+        "options": {}
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-failed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-failed",
+      "name": "Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "message": "Webhook timeout — job still processing after poll window",
+        "options": {}
+      },
+      "id": "respond-timeout",
+      "name": "Respond Pending",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1380,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "POST /render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /render": {
+      "main": [
+        [
+          {
+            "node": "Wait 15s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 15s": {
+      "main": [
+        [
+          {
+            "node": "GET /jobs/:id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /jobs/:id": {
+      "main": [
+        [
+          {
+            "node": "Completed or Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Completed or Failed?": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failed?": {
+      "main": [
+        [
+          {
+            "node": "Wait 15s",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Raise Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -1,0 +1,343 @@
+{
+  "name": "Kinetic Typography - MP3 Upload to Finished Video",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Kinetic Typography: MP3 → Finished MP4\n\nReceives a multipart/form-data upload with an audio file field named `file`, saves it on the shared media volume, triggers the render service, polls until the video is complete, and returns the finished MP4 as a binary download.\n\nDocumented in README §6. Requires:\n- `KINETIC_API_URL` env (n8n): render service URL\n- The media volume mounted identically in n8n and the render container"
+      },
+      "id": "note-usage",
+      "name": "Usage",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -500,
+        -260
+      ],
+      "width": 440,
+      "height": 300
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kinetic-video",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-upload",
+      "name": "MP3 Upload Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        0
+      ],
+      "webhookId": "kinetic-video-upload"
+    },
+    {
+      "parameters": {
+        "figureOutFileName": false,
+        "fileName": "={{ $env.KINETIC_MEDIA_DIR || '/media' }}/uploads/{{ $binary.file.fileName || 'upload.mp3' }}",
+        "dataPropertyName": "file",
+        "options": {}
+      },
+      "id": "save-mp3",
+      "name": "Save MP3",
+      "type": "n8n-nodes-base.writeBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:3000' }}/render",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"file_path\": \"{{ $('Save MP3').item.json.fileName }}\",\n  \"config_path\": \"{{ $('MP3 Upload Webhook').item.json.body?.config_path || 'config/config.yml' }}\",\n  \"language\": \"{{ $('MP3 Upload Webhook').item.json.body?.language || 'en' }}\"\n}",
+        "options": {
+          "headers": {
+            "entries": [
+              {
+                "name": "X-API-Key",
+                "value": "={{ .KINETIC_API_KEY }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "create-job",
+      "name": "POST /render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "wait-poll",
+      "name": "Wait 15s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        0
+      ],
+      "webhookId": "kinetic-poll-wait"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.KINETIC_API_URL || 'http://kinetic:3000' }}/jobs/{{ $('POST /render').item.json.job_id }}",
+        "options": {
+          "headers": {
+            "entries": [
+              {
+                "name": "X-API-Key",
+                "value": "={{ .KINETIC_API_KEY }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "check-job",
+      "name": "GET /jobs/:id",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-completed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-completed",
+      "name": "Completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        920,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-failed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-failed",
+      "name": "Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        920,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Render failed: {{ $json.error }}"
+      },
+      "id": "raise-error",
+      "name": "Raise Error",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1160,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "fileName": "={{ $('GET /jobs/:id').item.json.output }}",
+        "dataPropertyName": "file",
+        "options": {}
+      },
+      "id": "read-mp4",
+      "name": "Read MP4",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        1160,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "binary",
+        "responseBinaryPropertyName": "file",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Disposition",
+                "value": "attachment; filename=\"kinetic.mp4\""
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-video",
+      "name": "Respond with Video",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1400,
+        -160
+      ]
+    }
+  ],
+  "connections": {
+    "MP3 Upload Webhook": {
+      "main": [
+        [
+          {
+            "node": "Save MP3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save MP3": {
+      "main": [
+        [
+          {
+            "node": "POST /render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /render": {
+      "main": [
+        [
+          {
+            "node": "Wait 15s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 15s": {
+      "main": [
+        [
+          {
+            "node": "GET /jobs/:id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /jobs/:id": {
+      "main": [
+        [
+          {
+            "node": "Completed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Completed?": {
+      "main": [
+        [
+          {
+            "node": "Read MP4",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Failed?": {
+      "main": [
+        [
+          {
+            "node": "Wait 15s",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Raise Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read MP4": {
+      "main": [
+        [
+          {
+            "node": "Respond with Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

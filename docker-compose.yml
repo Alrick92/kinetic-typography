@@ -1,0 +1,15 @@
+services:
+  kinetic:
+    build: .
+    container_name: kinetic-typography
+    env_file: .env
+    environment:
+      - PORT=3000
+    volumes:
+      - ./output:/app/output
+      - ./cache:/app/cache
+      - ./config:/app/config
+      - /path/to/media:/media:ro
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
